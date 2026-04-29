@@ -392,9 +392,9 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;height:4px;z-index:30
         </div>
 
         <div class="card-swipe-hint">
-          <div class="sh-left">↑ Got it &nbsp;·&nbsp; ↓ Don't know</div>
-          <div style="color:var(--muted);font-family:var(--ttl);font-size:.5rem;letter-spacing:1px">Tap / ← → = flip &nbsp;·&nbsp; ↑↓ sel = category</div>
-          <div class="sh-right">← → swipe = flip card</div>
+          <div class="sh-left">↑ Got it · ↓ Miss · ← prev · → next</div>
+          <div style="color:var(--muted);font-family:var(--ttl);font-size:.5rem;letter-spacing:1px">Tap right = reveal · Tap left = back</div>
+          <div class="sh-right">↑↓ on selectors = category</div>
         </div>
       </div>
 
@@ -421,6 +421,13 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;height:4px;z-index:30
         <div class="rp-sec">
           <div class="rp-lbl">By Category</div>
           <div id="rCats"><div class="sr-empty">Study some cards first</div></div>
+        </div>
+        <div class="rp-sec" style="text-align:center;padding:18px 16px;">
+          <button onclick="resetProgress()" style="font-family:var(--ttl);font-size:.6rem;letter-spacing:2px;text-transform:uppercase;padding:9px 20px;border-radius:4px;border:1.5px solid var(--terra);background:white;color:var(--terra);cursor:pointer;transition:all .2s;"
+            onmouseover="this.style.background='var(--terra)';this.style.color='white'"
+            onmouseout="this.style.background='white';this.style.color='var(--terra)'">
+            Reset All Progress
+          </button>
         </div>
       </div>
 
@@ -484,9 +491,10 @@ const LANGS=[
 const S={
   li:0, di:0, ci:0,
   deck:[], idx:0, flipped:false,
-  ok:0, ng:0, hist:[], cst:{},
-  panel:1, // 0=search, 1=center, 2=stats
-  srchLang:'all', // search filter: 'all','ar','franco','it','es','pt'
+  hist:[], cst:{},
+  p:{},    // per-card results: {francoKey: 'ok'|'ng'}
+  panel:1,
+  srchLang:'all',
 };
 
 /* ── PANEL MANAGEMENT ── */
@@ -568,7 +576,7 @@ function onMU(e){
 }
 
 /* ── CARD SWIPE (on card only) ── */
-let cTX=0, cTY=0, cDir=null; // cDir: 'h'=horizontal, 'v'=vertical
+let cTX=0, cTY=0, cDir=null;
 const fcEl=document.getElementById('fc');
 fcEl.addEventListener('touchstart',e=>{
   cTX=e.touches[0].clientX; cTY=e.touches[0].clientY;
@@ -579,21 +587,31 @@ fcEl.addEventListener('touchmove',e=>{
   const dy=e.touches[0].clientY-cTY;
   if(!cDir&&Math.abs(dx)>10) cDir='h';
   if(!cDir&&Math.abs(dy)>10) cDir='v';
-  if(cDir==='h') e.stopPropagation(); // prevent panel swipe on horizontal
+  if(cDir==='h') e.stopPropagation(); // don't trigger panel swipe
   if(cDir) e.preventDefault();
 },{passive:false});
 fcEl.addEventListener('touchend',e=>{
-  if(!cDir){flip();return;}
   const dx=e.changedTouches[0].clientX-cTX;
   const dy=e.changedTouches[0].clientY-cTY;
-  if(cDir==='h') flip(); // left or right = flip
-  else if(cDir==='v'){
-    if(dy<-50) mark(true);   // swipe up = Got it ✓
+  if(!cDir){
+    // Pure tap: right half = flip to answer, left half = flip back to question
+    const rect=fcEl.getBoundingClientRect();
+    const tapX=e.changedTouches[0].clientX-rect.left;
+    if(tapX > rect.width/2){ if(!S.flipped) flip(); }
+    else { if(S.flipped) flip(); }
+    cDir=null; return;
+  }
+  if(cDir==='h'){
+    if(dx>60) prev();          // swipe right → previous card
+    else if(dx<-60) next();   // swipe left  → next card
+  } else if(cDir==='v'){
+    if(dy<-50) mark(true);    // swipe up   = Got it ✓
     else if(dy>50) mark(false); // swipe down = Don't know ✗
   }
   cDir=null;
 },{passive:true});
-// Desktop card drag
+
+// Desktop mouse
 let cMX=0, cMY=0, cMDir=null;
 fcEl.addEventListener('mousedown',e=>{
   e.stopPropagation();
@@ -609,10 +627,19 @@ function onCMM(e){
 function onCMU(e){
   fcEl.removeEventListener('mousemove',onCMM);
   fcEl.removeEventListener('mouseup',onCMU);
-  if(!cMDir){flip();return;}
   const dx=e.clientX-cMX, dy=e.clientY-cMY;
-  if(cMDir==='h') flip();
-  else if(cMDir==='v'){
+  if(!cMDir){
+    // Pure click: right half = flip to answer, left half = flip back
+    const rect=fcEl.getBoundingClientRect();
+    const clickX=e.clientX-rect.left;
+    if(clickX > rect.width/2){ if(!S.flipped) flip(); }
+    else { if(S.flipped) flip(); }
+    cMDir=null; return;
+  }
+  if(cMDir==='h'){
+    if(dx>40) prev();
+    else if(dx<-40) next();
+  } else if(cMDir==='v'){
     if(dy<-40) mark(true);
     else if(dy>40) mark(false);
   }
@@ -629,12 +656,12 @@ function buildSel(){
   cI.style.transform=`translateY(${-S.ci*48}px)`;
 }
 function scSel(w,d){
-  if(w==='d'){S.di=Math.max(0,Math.min(DIRS.length-1,S.di+d));buildSel();showCard();}
-  else{S.ci=Math.max(0,Math.min(CATS.length-1,S.ci+d));buildSel();buildDeck();showCard();}
+  if(w==='d'){S.di=Math.max(0,Math.min(DIRS.length-1,S.di+d));buildSel();saveProgress();showCard();}
+  else{S.ci=Math.max(0,Math.min(CATS.length-1,S.ci+d));buildSel();buildDeck();saveProgress();showCard();}
 }
 function setSel(w,i){
-  if(w==='d'){S.di=i;buildSel();showCard();}
-  else{S.ci=i;buildSel();buildDeck();showCard();}
+  if(w==='d'){S.di=i;buildSel();saveProgress();showCard();}
+  else{S.ci=i;buildSel();buildDeck();saveProgress();showCard();}
 }
 // Wheel on selectors
 document.getElementById('dSel').addEventListener('wheel',e=>{e.preventDefault();scSel('d',e.deltaY>0?1:-1);},{passive:false});
@@ -657,42 +684,52 @@ function buildDeck(){
   const id=CATS[S.ci].id;
   let d=VOCAB.filter(c=>c.ar);
   if(id!=='all')d=d.filter(c=>c.cats.includes(id));
-  S.deck=d;S.idx=0;S.ok=0;S.ng=0;S.hist=[];updSt();
+  S.deck=d;S.idx=0;S.hist=[];updSt();
 }
 
-/* ── CARD RENDERING ── */
-function tags(cats){
-  return(cats||[]).slice(0,2).map(id=>{const c=CATS.find(x=>x.id===id);return`<span class="ctag">${c?c.lbl:id}</span>`;}).join('');
-}
-function showCard(){
-  const card=S.deck[S.idx];
-  S.flipped=false;fcEl.classList.remove('flip');
-  if(!card){
-    document.getElementById('cFr').innerHTML='<div style="color:var(--muted);font-style:italic">No cards here</div>';
-    document.getElementById('cBk').innerHTML='';
-    updSt();return;
-  }
-  const lang=LANGS[S.li].code,flag=LANGS[S.li].flag,t=tr(card.i,lang);
-  const dir=S.di;
-  const tl=(lang!=='it'&&t)?`<div class="ctr2">${flag} ${t}</div>`:'';
-  const tgs=tags(card.cats);
-  const bl='<div class="cbl">✦</div>';
-  if(dir===0){
-    document.getElementById('cFr').innerHTML=`<div class="ccats">${tgs}</div><div class="cchip">Arabic · عربي</div><div class="car" dir="rtl">${card.ar}</div><div class="chint">Tap to reveal</div>${bl}`;
-    document.getElementById('cBk').innerHTML=`<div class="ccats">${tgs}</div><div class="cchip">Translation</div><div class="cfr">${card.f}</div><div class="cit">🇮🇹 ${card.i}</div>${tl}<div class="chint">Tap to flip back</div>${bl}`;
-  }else if(dir===1){
-    const ft=(lang!=='it'&&t)?t:card.i;
-    document.getElementById('cFr').innerHTML=`<div class="ccats">${tgs}</div><div class="cchip">${flag} ${LANGS[S.li].name}</div><div class="cfr" style="font-size:1.5rem">${ft}</div><div class="chint">Tap to reveal Arabic</div>${bl}`;
-    document.getElementById('cBk').innerHTML=`<div class="ccats">${tgs}</div><div class="cchip">Arabic · عربي</div><div class="car" dir="rtl">${card.ar}</div><div class="cfr" style="font-size:.9rem;opacity:.5">${card.f}</div><div class="chint">Tap to flip back</div>${bl}`;
-  }else{
-    document.getElementById('cFr').innerHTML=`<div class="ccats">${tgs}</div><div class="cchip">Franco Arabic</div><div class="cfr" style="font-size:1.4rem">${card.f}</div><div class="chint">Tap to reveal Arabic</div>${bl}`;
-    document.getElementById('cBk').innerHTML=`<div class="ccats">${tgs}</div><div class="cchip">Arabic · عربي</div><div class="car" dir="rtl">${card.ar}</div><div class="cit">🇮🇹 ${card.i}</div>${tl}<div class="chint">Tap to flip back</div>${bl}`;
-  }
-  updSt();
-}
-function flip(){S.flipped=!S.flipped;fcEl.classList.toggle('flip',S.flipped);}
-function next(){if(S.idx<S.deck.length-1){S.idx++;showCard();}}
+/* ── PERSISTENCE ── */
+// Each card is keyed by its franco text (unique identifier).
+// P (progress) stores per-card result: 'ok', 'ng', or undefined (unseen).
+// We also persist: li (lang), di (direction), ci (category), cst (cat stats).
+const STORE_KEY='arabflash_progress_v1';
 
+function saveProgress(){
+  try{
+    localStorage.setItem(STORE_KEY, JSON.stringify({
+      p:  S.p,    // {francoKey: 'ok'|'ng'}
+      cst:S.cst,  // category stats
+      li: S.li,
+      di: S.di,
+      ci: S.ci,
+    }));
+  }catch(e){console.warn('Save failed:',e);}
+}
+
+function loadProgress(){
+  try{
+    const raw=localStorage.getItem(STORE_KEY);
+    if(!raw) return;
+    const data=JSON.parse(raw);
+    if(data.p)   S.p   = data.p;
+    if(data.cst) S.cst = data.cst;
+    if(typeof data.li==='number') S.li=data.li;
+    if(typeof data.di==='number') S.di=data.di;
+    if(typeof data.ci==='number') S.ci=data.ci;
+  }catch(e){console.warn('Load failed:',e);}
+}
+
+// Compute session ok/ng from S.p (only cards in current deck)
+function sessionCounts(){
+  let ok=0,ng=0;
+  S.deck.forEach(card=>{
+    const v=S.p[card.f];
+    if(v==='ok') ok++;
+    else if(v==='ng') ng++;
+  });
+  return {ok,ng};
+}
+
+/* ── MARK — per-card, deduplicating ── */
 function flashResult(ok){
   const el=document.getElementById('rFlash');
   el.textContent=ok?'✓':'✗';
@@ -703,51 +740,148 @@ function flashResult(ok){
 
 function mark(ok){
   const card=S.deck[S.idx];
-  if(ok)S.ok++;else S.ng++;
+  if(!card) return;
   flashResult(ok);
-  if(card){
-    S.hist.unshift({card,ok});if(S.hist.length>20)S.hist.pop();
-    (card.cats||['general']).forEach(c=>{if(!S.cst[c])S.cst[c]={ok:0,t:0};S.cst[c].t++;if(ok)S.cst[c].ok++;});
-  }
+
+  const key=card.f; // unique card identifier
+  const prev=S.p[key]; // previous result for this card: 'ok', 'ng', or undefined
+
+  // Update per-card result (overwrite — last answer wins)
+  S.p[key]=ok?'ok':'ng';
+
+  // Update category stats — adjust for the change, not add blindly
+  (card.cats||['general']).forEach(cat=>{
+    if(!S.cst[cat]) S.cst[cat]={ok:0,t:0};
+    if(prev===undefined){
+      // First time seeing this card: add to total
+      S.cst[cat].t++;
+    }
+    // Adjust ok count based on transition
+    if(prev==='ok' && !ok) S.cst[cat].ok--;      // was ok, now ng: subtract
+    else if(prev!=='ok' && ok) S.cst[cat].ok++;   // was ng/unseen, now ok: add
+    // If prev===ok and ok===true: no change
+    // If prev===ng and ok===false: no change
+    // If prev===undefined and ok===false: t++ already done, ok stays
+  });
+
+  // Recent history (just for display, shows last 20 interactions)
+  S.hist.unshift({card,ok});
+  if(S.hist.length>20) S.hist.pop();
+
+  saveProgress();
   updSt();updRP();
   setTimeout(()=>next(),300);
 }
 
 function updSt(){
   const t=S.deck.length,n=t?S.idx+1:0;
+  const {ok,ng}=sessionCounts();
   document.getElementById('sI').textContent=n||'—';
   document.getElementById('sT').textContent=t||'—';
-  document.getElementById('sOk').textContent=S.ok;
-  document.getElementById('sNg').textContent=S.ng;
+  document.getElementById('sOk').textContent=ok;
+  document.getElementById('sNg').textContent=ng;
   document.getElementById('sPf').style.width=(t?(S.idx/t*100):0)+'%';
 }
+
 function updRP(){
-  const sn=S.ok+S.ng,pct=sn?Math.round(S.ok/sn*100):0;
-  document.getElementById('rOk').textContent=S.ok;
-  document.getElementById('rNg').textContent=S.ng;
-  document.getElementById('rPct').textContent=sn?pct+'%':'—';
-  document.getElementById('rSn').textContent=sn;
+  const {ok,ng}=sessionCounts();
+  const seen=S.deck.filter(c=>S.p[c.f]!==undefined).length;
+  const pct=seen?Math.round(ok/seen*100):0;
+  document.getElementById('rOk').textContent=ok;
+  document.getElementById('rNg').textContent=ng;
+  document.getElementById('rPct').textContent=seen?pct+'%':'—';
+  document.getElementById('rSn').textContent=seen;
   const p=S.deck.length?Math.round(S.idx/S.deck.length*100):0;
   document.getElementById('rPf').style.width=p+'%';
   document.getElementById('rPl').textContent=p+'%';
+
+  // Recent history
   const hl=document.getElementById('rHist');
-  hl.innerHTML=S.hist.length?S.hist.slice(0,8).map(h=>
-    `<div class="hi-item"><span class="hi-mk">${h.ok?'✓':'✗'}</span><span class="hi-ar" dir="rtl">${h.card.ar||'—'}</span><span class="hi-it">${h.card.i}</span></div>`).join('')
+  hl.innerHTML=S.hist.length
+    ?S.hist.slice(0,8).map(h=>
+      `<div class="hi-item"><span class="hi-mk">${h.ok?'✓':'✗'}</span><span class="hi-ar" dir="rtl">${h.card.ar||'—'}</span><span class="hi-it">${h.card.i}</span></div>`
+    ).join('')
     :'<div class="sr-empty">No cards reviewed yet</div>';
+
+  // Category breakdown
   const ac=Object.entries(S.cst).sort((a,b)=>b[1].t-a[1].t).slice(0,8);
-  document.getElementById('rCats').innerHTML=ac.length?ac.map(([id,{ok,t}])=>{
-    const c=CATS.find(x=>x.id===id);const p2=Math.round(ok/t*100);
-    return`<div class="csr"><span class="csr-ico">${c?c.ico:'⚡'}</span><span class="csr-lbl">${c?c.lbl:id}</span><div class="csr-t"><div class="csr-f" style="width:${p2}%"></div></div><span class="csr-p">${p2}%</span></div>`;
-  }).join(''):'<div class="sr-empty">Study some cards first</div>';
+  document.getElementById('rCats').innerHTML=ac.length
+    ?ac.map(([id,{ok:co,t}])=>{
+      const c=CATS.find(x=>x.id===id);
+      const p2=t?Math.round(co/t*100):0;
+      return`<div class="csr"><span class="csr-ico">${c?c.ico:'⚡'}</span><span class="csr-lbl">${c?c.lbl:id}</span><div class="csr-t"><div class="csr-f" style="width:${p2}%"></div></div><span class="csr-p">${p2}%</span></div>`;
+    }).join('')
+    :'<div class="sr-empty">Study some cards first</div>';
 }
+
+function resetProgress(){
+  if(!confirm('Reset all progress? This cannot be undone.')) return;
+  S.p={}; S.cst={}; S.hist=[];
+  localStorage.removeItem(STORE_KEY);
+  updSt(); updRP();
+}
+
+function tags(cats){
+  return(cats||[]).slice(0,2).map(id=>{const c=CATS.find(x=>x.id===id);return`<span class="ctag">${c?c.lbl:id}</span>`;}).join('');
+}
+function showCard(){
+  const card=S.deck[S.idx];
+  // Immediately clear the back face so it's never visible during the unflip animation
+  document.getElementById('cBk').innerHTML='';
+  // Unflip to front (animated)
+  S.flipped=false; fcEl.classList.remove('flip');
+  if(!card){
+    document.getElementById('cFr').innerHTML='<div style="color:var(--muted);font-style:italic">No cards here</div>';
+    updSt();return;
+  }
+  // Populate front immediately
+  const lang=LANGS[S.li].code,flag=LANGS[S.li].flag,t=tr(card.i,lang);
+  const dir=S.di;
+  const tl=(lang!=='it'&&t)?`<div class="ctr2">${flag} ${t}</div>`:'';
+  const tgs=tags(card.cats);
+  const bl='<div class="cbl">✦</div>';
+  let frontHTML='', backHTML='';
+  if(dir===0){
+    frontHTML=`<div class="ccats">${tgs}</div><div class="cchip">Arabic · عربي</div><div class="car" dir="rtl">${card.ar}</div><div class="chint">Tap right to reveal</div>${bl}`;
+    backHTML=`<div class="ccats">${tgs}</div><div class="cchip">Translation</div><div class="cfr">${card.f}</div><div class="cit">🇮🇹 ${card.i}</div>${tl}<div class="chint">Tap left to go back</div>${bl}`;
+  }else if(dir===1){
+    const ft=(lang!=='it'&&t)?t:card.i;
+    frontHTML=`<div class="ccats">${tgs}</div><div class="cchip">${flag} ${LANGS[S.li].name}</div><div class="cfr" style="font-size:1.5rem">${ft}</div><div class="chint">Tap right to reveal Arabic</div>${bl}`;
+    backHTML=`<div class="ccats">${tgs}</div><div class="cchip">Arabic · عربي</div><div class="car" dir="rtl">${card.ar}</div><div class="cfr" style="font-size:.9rem;opacity:.5">${card.f}</div><div class="chint">Tap left to go back</div>${bl}`;
+  }else{
+    frontHTML=`<div class="ccats">${tgs}</div><div class="cchip">Franco Arabic</div><div class="cfr" style="font-size:1.4rem">${card.f}</div><div class="chint">Tap right to reveal Arabic</div>${bl}`;
+    backHTML=`<div class="ccats">${tgs}</div><div class="cchip">Arabic · عربي</div><div class="car" dir="rtl">${card.ar}</div><div class="cit">🇮🇹 ${card.i}</div>${tl}<div class="chint">Tap left to go back</div>${bl}`;
+  }
+  document.getElementById('cFr').innerHTML=frontHTML;
+  // Populate back face AFTER flip animation ends (500ms) so it's never seen mid-flip
+  setTimeout(()=>{ document.getElementById('cBk').innerHTML=backHTML; }, 520);
+  updSt();
+}
+
+function flip(){
+  S.flipped=!S.flipped;
+  fcEl.classList.toggle('flip',S.flipped);
+}
+
+function next(){if(S.idx<S.deck.length-1){S.idx++;showCard();}}
+function prev(){if(S.idx>0){S.idx--;showCard();}}
+
+function flashResult(ok){
+  const el=document.getElementById('rFlash');
+  el.textContent=ok?'✓':'✗';
+  el.style.color=ok?'var(--teal)':'var(--terra)';
+  el.classList.add('show');
+  setTimeout(()=>el.classList.remove('show'),500);
+}
+
 
 /* ── LANGUAGE ── */
 function cycleLang(){
   S.li=(S.li+1)%LANGS.length;
   const l=LANGS[S.li];
   document.getElementById('langBtn').textContent=l.flag+' '+l.name;
+  saveProgress();
   showCard();
-  // Update search filter to match new language
   doSrch(document.getElementById('si').value);
 }
 
@@ -854,8 +988,8 @@ function clrSrch(){
 document.addEventListener('keydown',e=>{
   if(document.activeElement.tagName==='INPUT') return;
   if(e.key===' '||e.key==='Enter'){e.preventDefault();flip();}
-  else if(e.key==='ArrowRight'){if(S.panel===1)flip();else goPanel(S.panel+1);}
-  else if(e.key==='ArrowLeft'){if(S.panel===1)flip();else goPanel(S.panel-1);}
+  else if(e.key==='ArrowRight'){if(S.panel===1)next();else goPanel(S.panel+1);}
+  else if(e.key==='ArrowLeft'){if(S.panel===1)prev();else goPanel(S.panel-1);}
   else if(e.key==='ArrowUp'){if(S.panel===1)mark(true);else scSel('c',-1);}
   else if(e.key==='ArrowDown'){if(S.panel===1)mark(false);else scSel('c',1);}
   else if(e.key==='y'||e.key==='Y')mark(true);
@@ -867,6 +1001,10 @@ document.addEventListener('keydown',e=>{
 });
 
 /* ── INIT ── */
+// S.p must exist before loadProgress
+loadProgress();
+// Apply restored selector positions
+document.getElementById('langBtn').textContent=LANGS[S.li].flag+' '+LANGS[S.li].name;
 buildFilters();
 buildSel();
 buildDeck();

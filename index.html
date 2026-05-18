@@ -407,6 +407,21 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;height:4px;z-index:30
           </div>
         </div>
 
+        <!-- Wrong-only toggle -->
+        <div style="width:100%;max-width:580px;margin-bottom:14px;display:flex;gap:10px;align-items:center;">
+          <button id="wrongBtn" onclick="toggleWrongOnly()"
+            style="display:flex;align-items:center;gap:8px;padding:9px 16px;
+              border-radius:6px;border:1.5px solid var(--border2);background:white;
+              cursor:pointer;font-family:var(--bdy);font-size:1rem;color:var(--muted);
+              transition:all .2s;box-shadow:0 2px 7px rgba(26,18,8,.07);">
+            <span id="wrongBtnIcon">✗</span>
+            <span id="wrongBtnTxt">Review mistakes only</span>
+            <span id="wrongBtnCount" style="font-family:var(--ttl);font-size:.6rem;
+              letter-spacing:.5px;padding:2px 8px;background:var(--sand2);
+              color:var(--muted);border-radius:10px;margin-left:4px;"></span>
+          </button>
+        </div>
+
         <!-- Cylinder popup (shared, reused for all three selectors) -->
         <div class="cyl-overlay" id="cylOverlay" onclick="closeCyl(event)">
           <div class="cyl-popup" onclick="event.stopPropagation()">
@@ -537,7 +552,8 @@ const S={
   li:0, di:0, ci:0,
   deck:[], idx:0, flipped:false,
   hist:[], cst:{},
-  p:{},    // per-card results: {francoKey: 'ok'|'ng'}
+  p:{},
+  wrongOnly: false,
   panel:1,
   srchLang:'all',
 };
@@ -874,11 +890,53 @@ function scSel(w, delta) {
 
 /* ── DECK ── */
 function shuf(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
+function toggleWrongOnly(){
+  S.wrongOnly = !S.wrongOnly;
+  updateWrongBtn();
+  buildDeck();
+  showCard();
+}
+
+function updateWrongBtn(){
+  const id = CATS[S.ci].id;
+  let pool = VOCAB.filter(c=>c.ar);
+  if(id!=='all') pool = pool.filter(c=>c.cats.includes(id));
+  const wrongCount = pool.filter(c=>S.p[c.f]==='ng').length;
+
+  const btn = document.getElementById('wrongBtn');
+  const icon = document.getElementById('wrongBtnIcon');
+  const txt = document.getElementById('wrongBtnTxt');
+  const cnt = document.getElementById('wrongBtnCount');
+
+  cnt.textContent = wrongCount;
+
+  if(S.wrongOnly){
+    btn.style.background = 'var(--terra)';
+    btn.style.borderColor = 'var(--terra)';
+    btn.style.color = 'white';
+    cnt.style.background = 'rgba(255,255,255,.2)';
+    cnt.style.color = 'white';
+    icon.textContent = '✗';
+    txt.textContent = 'Mistakes only — ON';
+  } else {
+    btn.style.background = 'white';
+    btn.style.borderColor = 'var(--border2)';
+    btn.style.color = wrongCount > 0 ? 'var(--terra)' : 'var(--muted)';
+    cnt.style.background = 'var(--sand2)';
+    cnt.style.color = 'var(--muted)';
+    icon.textContent = '✗';
+    txt.textContent = 'Review mistakes only';
+  }
+}
+
 function buildDeck(){
   const id=CATS[S.ci].id;
   let d=VOCAB.filter(c=>c.ar);
-  if(id!=='all')d=d.filter(c=>c.cats.includes(id));
-  S.deck=d;S.idx=0;S.hist=[];updSt();
+  if(id!=='all') d=d.filter(c=>c.cats.includes(id));
+  if(S.wrongOnly) d=d.filter(c=>S.p[c.f]==='ng');
+  S.deck=d;S.idx=0;S.hist=[];
+  updateWrongBtn();
+  updSt();
 }
 
 /* ── PERSISTENCE ── */
@@ -964,6 +1022,7 @@ function mark(ok){
 
   saveProgress();
   updSt();updRP();
+  updateWrongBtn();
   setTimeout(()=>next(),300);
 }
 
@@ -1209,6 +1268,7 @@ loadProgress();
 updateSelButtons();
 buildFilters();
 buildDeck();
+updateWrongBtn();
 showCard();
 updRP();
 </script>

@@ -548,7 +548,7 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;height:4px;z-index:30
       <div class="panel" id="pStats">
         <div class="panel-edge-hint">Search ◀</div>
         <div class="rp-sec">
-          <div class="rp-lbl">Session</div>
+          <div class="rp-lbl" id="rpDirLbl">Session</div>
           <div class="sg">
             <div class="sc"><span class="sn ok" id="rOk">0</span><span class="sl">Correct</span></div>
             <div class="sc"><span class="sn ng" id="rNg">0</span><span class="sl">Wrong</span></div>
@@ -691,8 +691,8 @@ const LANGS=[
 const S={
   li:0, di:0, ci:0,
   deck:[], idx:0, flipped:false,
-  hist:[], cst:{},
-  p:{},
+  hist:[], cst:[{},{},{}],   // per-direction category stats [dir0, dir1, dir2]
+  p:[{},{},{}],              // per-direction progress [dir0, dir1, dir2]
   wrongOnly: false,
   panel:1,
   srchLang:'all',
@@ -1042,7 +1042,7 @@ function updateWrongBtn(){
   const id = CATS[S.ci].id;
   let pool = VOCAB.filter(c=>c.ar);
   if(id!=='all') pool = pool.filter(c=>c.cats.includes(id));
-  const wrongCount = pool.filter(c=>S.p[c.f]==='ng').length;
+  const wrongCount = pool.filter(c=>S.p[S.di][c.f]==='ng').length;
 
   const btn = document.getElementById('wrongBtn');
   const icon = document.getElementById('wrongBtnIcon');
@@ -1074,7 +1074,7 @@ function buildDeck(){
   const id=CATS[S.ci].id;
   let d=allCards();
   if(id!=='all') d=d.filter(c=>c.cats.includes(id));
-  if(S.wrongOnly) d=d.filter(c=>S.p[c.f]==='ng');
+  if(S.wrongOnly) d=d.filter(c=>S.p[S.di][c.f]==='ng');
   // Always shuffle so order is different every session
   for(let i=d.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[d[i],d[j]]=[d[j],d[i]];}
   S.deck=d;S.idx=0;S.hist=[];
@@ -1086,13 +1086,13 @@ function buildDeck(){
 // Each card is keyed by its franco text (unique identifier).
 // P (progress) stores per-card result: 'ok', 'ng', or undefined (unseen).
 // We also persist: li (lang), di (direction), ci (category), cst (cat stats).
-const STORE_KEY='arabflash_progress_v1';
+const STORE_KEY='arabflash_progress_v2';
 
 function saveProgress(){
   try{
     localStorage.setItem(STORE_KEY, JSON.stringify({
-      p:  S.p,    // {francoKey: 'ok'|'ng'}
-      cst:S.cst,  // category stats
+      p:  S.p,    // [{francoKey:'ok'|'ng'}, {}, {}] — one per direction
+      cst:S.cst,  // [{cat stats}, {}, {}] — one per direction
       li: S.li,
       di: S.di,
       ci: S.ci,
@@ -1102,22 +1102,41 @@ function saveProgress(){
 
 function loadProgress(){
   try{
+    // Try new v2 format first
     const raw=localStorage.getItem(STORE_KEY);
-    if(!raw) return;
-    const data=JSON.parse(raw);
-    if(data.p)   S.p   = data.p;
-    if(data.cst) S.cst = data.cst;
-    if(typeof data.li==='number') S.li=data.li;
-    if(typeof data.di==='number') S.di=data.di;
-    if(typeof data.ci==='number') S.ci=data.ci;
+    if(raw){
+      const data=JSON.parse(raw);
+      if(Array.isArray(data.p))   S.p   = data.p;
+      if(Array.isArray(data.cst)) S.cst = data.cst;
+      if(typeof data.li==='number') S.li=data.li;
+      if(typeof data.di==='number') S.di=data.di;
+      if(typeof data.ci==='number') S.ci=data.ci;
+      return;
+    }
+    // Migrate old v1 format: progress was stored in direction 2 (Franco→Idioma)
+    const oldRaw=localStorage.getItem('arabflash_progress_v1');
+    if(oldRaw){
+      const old=JSON.parse(oldRaw);
+      if(old.p && typeof old.p==='object' && !Array.isArray(old.p)){
+        S.p[2]=old.p;   // preserve Franco→Idioma progress
+      }
+      if(old.cst && typeof old.cst==='object' && !Array.isArray(old.cst)){
+        S.cst[2]=old.cst;
+      }
+      if(typeof old.li==='number') S.li=old.li;
+      if(typeof old.di==='number') S.di=old.di;
+      if(typeof old.ci==='number') S.ci=old.ci;
+      saveProgress(); // write in new format right away
+    }
   }catch(e){console.warn('Load failed:',e);}
 }
 
-// Compute session ok/ng from S.p (only cards in current deck)
+// Compute session ok/ng from S.p for current direction (only cards in current deck)
 function sessionCounts(){
   let ok=0,ng=0;
+  const di=S.di;
   S.deck.forEach(card=>{
-    const v=S.p[card.f];
+    const v=S.p[di][card.f];
     if(v==='ok') ok++;
     else if(v==='ng') ng++;
   });
@@ -1138,25 +1157,23 @@ function mark(ok){
   if(!card) return;
   flashResult(ok);
 
+  const di=S.di;
   const key=card.f; // unique card identifier
-  const prev=S.p[key]; // previous result for this card: 'ok', 'ng', or undefined
+  const prev=S.p[di][key]; // previous result for this card in this direction
 
-  // Update per-card result (overwrite — last answer wins)
-  S.p[key]=ok?'ok':'ng';
+  // Update per-card result for current direction (overwrite — last answer wins)
+  S.p[di][key]=ok?'ok':'ng';
 
-  // Update category stats — adjust for the change, not add blindly
+  // Update category stats for current direction
   (card.cats||['general']).forEach(cat=>{
-    if(!S.cst[cat]) S.cst[cat]={ok:0,t:0};
+    if(!S.cst[di][cat]) S.cst[di][cat]={ok:0,t:0};
     if(prev===undefined){
-      // First time seeing this card: add to total
-      S.cst[cat].t++;
+      // First time seeing this card in this direction: add to total
+      S.cst[di][cat].t++;
     }
     // Adjust ok count based on transition
-    if(prev==='ok' && !ok) S.cst[cat].ok--;      // was ok, now ng: subtract
-    else if(prev!=='ok' && ok) S.cst[cat].ok++;   // was ng/unseen, now ok: add
-    // If prev===ok and ok===true: no change
-    // If prev===ng and ok===false: no change
-    // If prev===undefined and ok===false: t++ already done, ok stays
+    if(prev==='ok' && !ok) S.cst[di][cat].ok--;
+    else if(prev!=='ok' && ok) S.cst[di][cat].ok++;
   });
 
   // Recent history (just for display, shows last 20 interactions)
@@ -1180,8 +1197,11 @@ function updSt(){
 }
 
 function updRP(){
+  const dirNames=['Arabic → Language','Language → Arabic','Franco → Language'];
+  const lbl=document.getElementById('rpDirLbl');
+  if(lbl) lbl.textContent='Session · '+dirNames[S.di];
   const {ok,ng}=sessionCounts();
-  const seen=S.deck.filter(c=>S.p[c.f]!==undefined).length;
+  const seen=S.deck.filter(c=>S.p[S.di][c.f]!==undefined).length;
   const pct=seen?Math.round(ok/seen*100):0;
   document.getElementById('rOk').textContent=ok;
   document.getElementById('rNg').textContent=ng;
@@ -1200,7 +1220,7 @@ function updRP(){
     :'<div class="sr-empty">No cards reviewed yet</div>';
 
   // Category breakdown
-  const ac=Object.entries(S.cst).sort((a,b)=>b[1].t-a[1].t).slice(0,8);
+  const ac=Object.entries(S.cst[S.di]).sort((a,b)=>b[1].t-a[1].t).slice(0,8);
   document.getElementById('rCats').innerHTML=ac.length
     ?ac.map(([id,{ok:co,t}])=>{
       const c=CATS.find(x=>x.id===id);
@@ -1211,9 +1231,15 @@ function updRP(){
 }
 
 function resetProgress(){
-  if(!confirm('Reset all progress? This cannot be undone.')) return;
-  S.p={}; S.cst={}; S.hist=[];
-  localStorage.removeItem(STORE_KEY);
+  const dirNames=['Arabic → Language','Language → Arabic','Franco → Language'];
+  const choice=confirm(
+    'Reset progress for current direction ('+dirNames[S.di]+') only?\n\n'+
+    'OK = reset current direction only\n'+
+    'Cancel = keep everything'
+  );
+  if(!choice) return;
+  S.p[S.di]={}; S.cst[S.di]={}; S.hist=[];
+  saveProgress();
   updSt(); updRP();
 }
 

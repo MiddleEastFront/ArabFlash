@@ -413,6 +413,20 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;height:4px;z-index:30
 .ed-notice{font-family:var(--ttl);font-size:.52rem;letter-spacing:1px;
   text-transform:uppercase;color:var(--muted);text-align:center;
   padding:8px 0 0;}
+.sy-tabs{display:flex;gap:0;border-bottom:1px solid var(--border);}
+.sy-tab{flex:1;font-family:var(--ttl);font-size:.6rem;letter-spacing:2px;
+  text-transform:uppercase;padding:10px;text-align:center;cursor:pointer;
+  color:var(--muted);background:white;border:none;border-bottom:2px solid transparent;}
+.sy-tab.on{color:var(--lapis);border-bottom-color:var(--gold);}
+.sy-pane{display:none;}
+.sy-pane.on{display:block;}
+.sy-ta{width:100%;min-height:160px;background:white;border:1.5px solid var(--border2);
+  border-radius:5px;padding:10px;font-family:monospace;font-size:.72rem;
+  color:var(--ink);resize:vertical;}
+.sy-info{font-family:var(--bdy);font-size:.85rem;color:var(--ink2);
+  line-height:1.4;margin-bottom:10px;}
+.sy-stat{font-family:var(--ttl);font-size:.56rem;letter-spacing:1px;
+  text-transform:uppercase;color:var(--muted);margin-top:6px;}
 </style>
 </head>
 <body>
@@ -550,6 +564,15 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;height:4px;z-index:30
             onmouseout="this.style.borderColor='var(--border2)'">
             ✎ Edit card
           </button>
+          <button onclick="openSync()"
+            style="font-family:var(--ttl);font-size:.55rem;letter-spacing:1.5px;text-transform:uppercase;
+              padding:7px 14px;border-radius:4px;border:1.5px solid var(--border2);background:white;
+              cursor:pointer;color:var(--muted);display:flex;align-items:center;gap:5px;
+              box-shadow:0 2px 5px rgba(26,18,8,.06);transition:all .2s;"
+            onmouseover="this.style.borderColor='var(--gold)'" 
+            onmouseout="this.style.borderColor='var(--border2)'">
+            ⇄ Backup
+          </button>
         </div>
 
       </div>
@@ -635,6 +658,43 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;height:4px;z-index:30
       <button class="ed-save" onclick="saveCard()">Save</button>
     </div>
     <div class="ed-notice" id="edNotice"></div>
+  </div>
+</div>
+
+<!-- Backup / Sync Overlay -->
+<div class="ed-overlay" id="syOverlay" onclick="closeSync(event)">
+  <div class="ed-popup" onclick="event.stopPropagation()">
+    <div class="ed-hdr">
+      <span class="ed-title">Backup Custom Cards</span>
+      <button class="ed-close" onclick="closeSync()">✕</button>
+    </div>
+    <div class="sy-tabs">
+      <button class="sy-tab on" id="syTabExport" onclick="syTab('export')">Export</button>
+      <button class="sy-tab" id="syTabImport" onclick="syTab('import')">Import</button>
+    </div>
+    <div class="ed-body">
+      <div class="sy-pane on" id="syExportPane">
+        <div class="sy-info">
+          These are the cards you've added, edited, or deleted on this device.
+          Copy this text and send it to Claude (or save it somewhere safe) so
+          it can be merged into the app's base vocabulary or restored later.
+        </div>
+        <textarea class="sy-ta" id="syExportTa" readonly></textarea>
+        <div class="sy-stat" id="syExportStat"></div>
+      </div>
+      <div class="sy-pane" id="syImportPane">
+        <div class="sy-info">
+          Paste a previously exported backup below and tap Import.
+          This will replace your current custom cards with the ones in the backup.
+        </div>
+        <textarea class="sy-ta" id="syImportTa" placeholder='[{"f":"...","i":"...","ar":"...","cats":[...]}]'></textarea>
+        <div class="sy-stat" id="syImportStat"></div>
+      </div>
+    </div>
+    <div class="ed-foot">
+      <button class="ed-cancel" onclick="closeSync()">Close</button>
+      <button class="ed-save" id="sySaveBtn" onclick="syCopyExport()">Copy</button>
+    </div>
   </div>
 </div>
 
@@ -1816,6 +1876,90 @@ function rebuildCc() {
   updateSelButtons();
   if(document.getElementById('catBrowseRow')) buildCatBrowse();
 }
+
+/* ══ BACKUP / SYNC ══ */
+function openSync(){
+  const overlay = document.getElementById('syOverlay');
+  syTab('export');
+  refreshSyncExport();
+  overlay.classList.add('open');
+}
+
+function closeSync(e){
+  if (e && e.target !== document.getElementById('syOverlay')) return;
+  document.getElementById('syOverlay').classList.remove('open');
+}
+
+function syTab(which){
+  const isExport = which === 'export';
+  document.getElementById('syTabExport').classList.toggle('on', isExport);
+  document.getElementById('syTabImport').classList.toggle('on', !isExport);
+  document.getElementById('syExportPane').classList.toggle('on', isExport);
+  document.getElementById('syImportPane').classList.toggle('on', !isExport);
+  const saveBtn = document.getElementById('sySaveBtn');
+  if(isExport){
+    saveBtn.textContent = 'Copy';
+    saveBtn.onclick = syCopyExport;
+    refreshSyncExport();
+  } else {
+    saveBtn.textContent = 'Import';
+    saveBtn.onclick = syDoImport;
+    document.getElementById('syImportStat').textContent = '';
+  }
+}
+
+function refreshSyncExport(){
+  const json = JSON.stringify(CUSTOM, null, 2);
+  document.getElementById('syExportTa').value = CUSTOM.length ? json : '[]';
+  const added = CUSTOM.filter(c=>!c._override && !c._deleted).length;
+  const edited = CUSTOM.filter(c=>c._override && !c._deleted).length;
+  const deleted = CUSTOM.filter(c=>c._deleted).length;
+  document.getElementById('syExportStat').textContent =
+    `${CUSTOM.length} change(s) — ${added} new, ${edited} edited, ${deleted} deleted`;
+}
+
+function syCopyExport(){
+  const ta = document.getElementById('syExportTa');
+  ta.select();
+  ta.setSelectionRange(0, 999999); // mobile support
+  try{
+    document.execCommand('copy');
+  }catch(e){}
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(ta.value).catch(()=>{});
+  }
+  const stat = document.getElementById('syExportStat');
+  const original = stat.textContent;
+  stat.textContent = '✓ Copied to clipboard!';
+  setTimeout(()=>{ stat.textContent = original; }, 1800);
+}
+
+function syDoImport(){
+  const raw = document.getElementById('syImportTa').value.trim();
+  const stat = document.getElementById('syImportStat');
+  if(!raw){ stat.textContent = '⚠ Paste a backup first.'; return; }
+  let data;
+  try{
+    data = JSON.parse(raw);
+  }catch(e){
+    stat.textContent = '⚠ Invalid JSON: '+e.message;
+    return;
+  }
+  if(!Array.isArray(data)){
+    stat.textContent = '⚠ Backup must be a JSON array.';
+    return;
+  }
+  if(!confirm('This will replace your current custom cards ('+CUSTOM.length+' change(s)) with '+data.length+' from the backup. Continue?')) return;
+
+  CUSTOM = data;
+  saveCustomCards();
+  rebuildCc();
+  buildDeck();
+  showCard();
+  updRP();
+  stat.textContent = '✓ Imported '+data.length+' change(s).';
+}
+
 
 </script>
 </body>

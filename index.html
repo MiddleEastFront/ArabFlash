@@ -275,6 +275,15 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;height:4px;z-index:30
 .f-pill:hover{border-color:var(--gold);color:var(--lapis);}
 .f-pill.on{background:var(--lapis);border-color:var(--lapis);color:var(--gold2);}
 .f-pill.on-terra{background:var(--terra);border-color:var(--terra);color:white;}
+.cat-browse-row{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;
+  max-height:84px;overflow-y:auto;padding-bottom:2px;}
+.cat-pill{font-family:var(--ttl);font-size:.54rem;letter-spacing:1px;text-transform:uppercase;
+  padding:5px 10px;border-radius:20px;border:1.5px solid var(--border2);
+  background:white;cursor:pointer;color:var(--muted);transition:all .18s;
+  display:flex;align-items:center;gap:4px;white-space:nowrap;}
+.cat-pill:hover{border-color:var(--gold);color:var(--lapis);}
+.cat-pill.on{background:var(--teal);border-color:var(--teal);color:white;}
+.cat-pill .cp-cnt{font-size:.5rem;opacity:.7;}
 .si-field{display:flex;align-items:center;gap:7px;background:white;
   border:1.5px solid var(--border2);border-radius:5px;padding:9px 12px;
   box-shadow:0 2px 6px rgba(26,18,8,.06);transition:border-color .2s,box-shadow .2s;}
@@ -441,6 +450,7 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;height:4px;z-index:30
         <div class="panel-edge-hint">Stats ▶</div>
         <div class="search-top">
           <div class="filter-row" id="filterRow"></div>
+          <div class="cat-browse-row" id="catBrowseRow"></div>
           <div class="si-field">
             <span class="si-ico">⌕</span>
             <input type="text" id="si" placeholder="Type to search…" oninput="onSrch(this.value)" autocomplete="off">
@@ -696,6 +706,7 @@ const S={
   wrongOnly: false,
   panel:1,
   srchLang:'all',
+  srchCat:null,
 };
 
 /* ── PANEL MANAGEMENT ── */
@@ -1001,12 +1012,14 @@ function confirmCyl() {
     updateSelButtons();
     saveProgress();
     showCard();
+    updRP();
   } else if (cylWhich === 'c') {
     S.ci = cylIdx;
     updateSelButtons();
     buildDeck();
     saveProgress();
     showCard();
+    updRP();
   }
   cylWhich = null;
 }
@@ -1036,6 +1049,7 @@ function toggleWrongOnly(){
   updateWrongBtn();
   buildDeck();
   showCard();
+  updRP();
 }
 
 function updateWrongBtn(){
@@ -1219,8 +1233,21 @@ function updRP(){
     ).join('')
     :'<div class="sr-empty">No cards reviewed yet</div>';
 
-  // Category breakdown
-  const ac=Object.entries(S.cst[S.di]).sort((a,b)=>b[1].t-a[1].t).slice(0,8);
+  // Category breakdown — percentage is over ALL words in the category,
+  // not just the ones answered so far. A category is "touched" if at least
+  // one of its cards has been answered (correct or wrong) in this direction.
+  const di=S.di;
+  const catTotals={};
+  allCards().forEach(card=>{
+    const seen=S.p[di][card.f]!==undefined;
+    (card.cats||['general']).forEach(cat=>{
+      if(!catTotals[cat]) catTotals[cat]={ok:0,t:0,touched:false};
+      catTotals[cat].t++;
+      if(S.p[di][card.f]==='ok') catTotals[cat].ok++;
+      if(seen) catTotals[cat].touched=true;
+    });
+  });
+  const ac=Object.entries(catTotals).filter(([id,v])=>v.touched).sort((a,b)=>b[1].t-a[1].t);
   document.getElementById('rCats').innerHTML=ac.length
     ?ac.map(([id,{ok:co,t}])=>{
       const c=CATS.find(x=>x.id===id);
@@ -1347,6 +1374,21 @@ function buildFilters(){
   document.getElementById('filterRow').innerHTML=FILTERS.map(f=>
     `<button class="f-pill${f.id===S.srchLang?' on':''}" id="fp_${f.id}" onclick="setFilter('${f.id}')">${f.lbl}</button>`
   ).join('');
+  buildCatBrowse();
+}
+
+function buildCatBrowse(){
+  document.getElementById('catBrowseRow').innerHTML=CATS.map(cat=>
+    `<button class="cat-pill${cat.id===S.srchCat?' on':''}" id="cbp_${cat.id}" onclick="setCatBrowse('${cat.id}')">${cat.ico} ${cat.lbl}<span class="cp-cnt">${cc[cat.id]||0}</span></button>`
+  ).join('');
+}
+
+function setCatBrowse(id){
+  // Toggle: clicking the active category again clears the filter
+  S.srchCat = (S.srchCat===id) ? null : id;
+  document.querySelectorAll('.cat-pill').forEach(el=>el.classList.remove('on'));
+  if(S.srchCat) document.getElementById('cbp_'+S.srchCat)?.classList.add('on');
+  doSrch(document.getElementById('si').value);
 }
 function setFilter(id){
   S.srchLang=id;
@@ -1359,6 +1401,7 @@ let sTimer;
 function onSrch(v){
   clearTimeout(sTimer);
   if(!v.trim()){
+    if(S.srchCat){ doSrch(''); return; }
     document.getElementById('srRes').innerHTML='<div class="sr-empty">← Swipe right to return to cards</div>';
     document.getElementById('siCnt').style.display='none';
     return;
@@ -1382,47 +1425,72 @@ function anyStartsAr(str, q) {
 }
 
 function doSrch(q){
-  if(!q||!q.trim()){
+  const hasQuery = q && q.trim();
+  const hasCat = !!S.srchCat;
+
+  if(!hasQuery && !hasCat){
     document.getElementById('srRes').innerHTML='<div class="sr-empty">← Swipe right to return to cards</div>';
     document.getElementById('siCnt').style.display='none';
     return;
   }
-  const ql=norm(q);
-  const lang=S.srchLang;
 
-  const res=allCards().filter(c=>{
-    if(lang==='ar'||lang==='all'){
-      if(anyStartsAr(c.ar, q)) return true;
-    }
-    if(lang==='franco'||lang==='all'){
-      if(anyStarts(c.f, ql)) return true;
-    }
-    if(lang==='it'||lang==='all'){
-      if(anyStarts(c.i, ql)) return true;
-    }
-    if(lang==='en'||lang==='all'){
-      const t=tr(c,'en');
-      if(t&&norm(t).startsWith(ql)) return true;
-    }
-    if(lang==='es'||lang==='all'){
-      const t=tr(c,'es');
-      if(t&&norm(t).startsWith(ql)) return true;
-    }
-    if(lang==='pt'||lang==='all'){
-      const t=tr(c,'pt');
-      if(t&&norm(t).startsWith(ql)) return true;
-    }
-    return false;
-  }).slice(0,40);
+  const ql=hasQuery?norm(q):'';
+  const lang=S.srchLang;
+  let pool=allCards();
+
+  // Filter by category first, if a category browse is active
+  if(hasCat){
+    pool=pool.filter(c=>(c.cats||[]).includes(S.srchCat));
+  }
+
+  let res;
+  if(hasQuery){
+    res=pool.filter(c=>{
+      if(lang==='ar'||lang==='all'){
+        if(anyStartsAr(c.ar, q)) return true;
+      }
+      if(lang==='franco'||lang==='all'){
+        if(anyStarts(c.f, ql)) return true;
+      }
+      if(lang==='it'||lang==='all'){
+        if(anyStarts(c.i, ql)) return true;
+      }
+      if(lang==='en'||lang==='all'){
+        const t=tr(c,'en');
+        if(t&&norm(t).startsWith(ql)) return true;
+      }
+      if(lang==='es'||lang==='all'){
+        const t=tr(c,'es');
+        if(t&&norm(t).startsWith(ql)) return true;
+      }
+      if(lang==='pt'||lang==='all'){
+        const t=tr(c,'pt');
+        if(t&&norm(t).startsWith(ql)) return true;
+      }
+      return false;
+    });
+  } else {
+    // Category browse with no text: show all words in category, sorted by Italian
+    res=[...pool].sort((a,b)=>a.i.localeCompare(b.i));
+  }
+
+  // Limit results only for free-text search (category browse shows everything)
+  const limited = hasQuery ? res.slice(0,40) : res;
 
   const cnt=document.getElementById('siCnt');
   cnt.style.display='block';
-  cnt.textContent=res.length+' result'+(res.length!==1?'s':'');
-  document.getElementById('srRes').innerHTML=res.length
-    ?res.map((c,ri)=>{
+  let cntLabel=limited.length+' result'+(limited.length!==1?'s':'');
+  if(hasCat){
+    const cat=CATS.find(x=>x.id===S.srchCat);
+    cntLabel += ' · '+(cat?cat.ico+' '+cat.lbl:S.srchCat);
+    if(!hasQuery) cntLabel += ' (all)';
+  }
+  cnt.textContent=cntLabel;
+
+  document.getElementById('srRes').innerHTML=limited.length
+    ?limited.map((c,ri)=>{
       const enT=tr(c,'en'), esT=tr(c,'es'), ptT=tr(c,'pt');
       const extra=[enT?'🇬🇧 '+enT:'', esT?'🇪🇸 '+esT:'', ptT?'🇧🇷 '+ptT:''].filter(Boolean).join(' · ');
-      const ac=allCards(); const vi=ac.findIndex(x=>x.f===c.f);
       return`<div class="sr-item" onclick="jumpTo(${ri},'${c.f.replace(/'/g,"\\'")}')">
         <div class="sr-ar" dir="rtl">${c.ar||'—'}</div>
         <div class="sr-info">
@@ -1432,7 +1500,7 @@ function doSrch(q){
         </div>
       </div>`;
     }).join('')
-    :'<div class="sr-empty">No results starting with that</div>';
+    :'<div class="sr-empty">No results found</div>';
 }
 
 function jumpTo(vi, fkey){
@@ -1746,6 +1814,7 @@ function rebuildCc() {
   cards.forEach(c => (c.cats || []).forEach(t => { cc[t] = (cc[t] || 0) + 1; }));
   // Update selector buttons to reflect new counts
   updateSelButtons();
+  if(document.getElementById('catBrowseRow')) buildCatBrowse();
 }
 
 </script>
